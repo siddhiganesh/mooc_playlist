@@ -8,26 +8,55 @@ from models import Video, Subtitle
 
 ai_bp = Blueprint("ai", __name__)
 
-# Configure Gemini
+# Use the latest stable models that work with current API
+MODELS_TO_TRY = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
+    "gemini-pro-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-pro",
+]
+
 if Config.GEMINI_API_KEY and Config.GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE":
     genai.configure(api_key=Config.GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-pro")
+    try:
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        print(f"✅ Available Gemini models: {available_models}")
+    except Exception as e:
+        print(f"⚠️ Could not list models: {e}")
+        available_models = []
 else:
-    model = None
+    available_models = []
+
+
+def get_model():
+    """Get a working Gemini model, trying the latest first."""
+    for model_name in MODELS_TO_TRY:
+        try:
+            return genai.GenerativeModel(model_name), model_name
+        except Exception:
+            continue
+    return None, None
 
 
 def generate_ai_response(prompt):
     """Generic Gemini caller with graceful fallback."""
-    if not model:
+    if not Config.GEMINI_API_KEY or Config.GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
         return (
-            "AI service is not configured. Please set your GEMINI_API_KEY in backend/.env. "
-            "Here is a placeholder summary based on the input you provided."
+            "⚠️ AI service is not configured.\n\n"
+            "Please set your GEMINI_API_KEY in backend/.env to enable AI features.\n\n"
+            "Get a free key at: https://aistudio.google.com/app/apikey"
         )
+    model, model_name = get_model()
+    if not model:
+        return "❌ No working Gemini model found. Check your API key and internet connection."
     try:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"AI service error: {str(e)}"
+        return f"❌ AI service error: {str(e)}\n\nModel used: {model_name}"
 
 
 @ai_bp.route("/summarize", methods=["POST"])
@@ -139,3 +168,24 @@ def generate_quiz():
     )
     raw = generate_ai_response(prompt)
     return jsonify({"raw": raw})
+
+
+@ai_bp.route("/models", methods=["GET"])
+@jwt_required()
+def list_models():
+    """Debug endpoint to list available models."""
+    if not Config.GEMINI_API_KEY or Config.GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
+        return jsonify({"error": "API key not configured"}), 400
+    try:
+        models = genai.list_models()
+        return jsonify({
+            "models": [
+                {
+                    "name": m.name,
+                    "supported_methods": list(m.supported_generation_methods)
+                }
+                for m in models
+            ]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
